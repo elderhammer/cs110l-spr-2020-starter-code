@@ -53,7 +53,6 @@ pub struct OpenFile {
 }
 
 impl OpenFile {
-    #[allow(unused)] // TODO: delete this line for Milestone 4
     pub fn new(name: String, cursor: usize, access_mode: AccessMode) -> OpenFile {
         OpenFile {
             name,
@@ -68,7 +67,6 @@ impl OpenFile {
     /// * For regular files, this will simply return the supplied path.
     /// * For terminals (files starting with /dev/pts), this will return "<terminal>".
     /// * For pipes (filenames formatted like pipe:[pipenum]), this will return "<pipe #pipenum>".
-    #[allow(unused)] // TODO: delete this line for Milestone 4
     fn path_to_name(path: &str) -> String {
         if path.starts_with("/dev/pts/") {
             String::from("<terminal>")
@@ -84,7 +82,6 @@ impl OpenFile {
     /// extracts the cursor position of that file descriptor (technically, the position of the
     /// open file table entry that the fd points to) using a regex. It returns None if the cursor
     /// couldn't be found in the fdinfo text.
-    #[allow(unused)] // TODO: delete this line for Milestone 4
     fn parse_cursor(fdinfo: &str) -> Option<usize> {
         // Regex::new will return an Error if there is a syntactical error in our regular
         // expression. We call unwrap() here because that indicates there's an obvious problem with
@@ -103,7 +100,6 @@ impl OpenFile {
     /// This file takes the contents of /proc/{pid}/fdinfo/{fdnum} for some file descriptor and
     /// extracts the access mode for that open file using the "flags:" field contained in the
     /// fdinfo text. It returns None if the "flags" field couldn't be found.
-    #[allow(unused)] // TODO: delete this line for Milestone 4
     fn parse_access_mode(fdinfo: &str) -> Option<AccessMode> {
         // Regex::new will return an Error if there is a syntactical error in our regular
         // expression. We call unwrap() here because that indicates there's an obvious problem with
@@ -134,17 +130,25 @@ impl OpenFile {
     /// program and we don't need to do fine-grained error handling, so returning Option is a
     /// simple way to indicate that "hey, we weren't able to get the necessary information"
     /// without making a big deal of it.)
-    #[allow(unused)] // TODO: delete this line for Milestone 4
     pub fn from_fd(pid: usize, fd: usize) -> Option<OpenFile> {
-        // TODO: implement for Milestone 4
-        unimplemented!();
+        let fd_path = format!("/proc/{pid}/fd/{fd}");
+        // 看看到底有没有这个文件
+        let link = fs::read_link(&fd_path).ok()?;
+        // 获取 OpenFile 的名字
+        let name = Self::path_to_name(link.to_str()?);
+
+        let fdinfo_path = format!("/proc/{pid}/fdinfo/{fd}");
+        let content = fs::read_to_string(&fdinfo_path).ok()?;
+        let cursor = Self::parse_cursor(&content)?;
+        let access_mode = Self::parse_access_mode(&content)?;
+
+        Some(OpenFile::new(name, cursor, access_mode))
     }
 
     /// This function returns the OpenFile's name with ANSI escape codes included to colorize
     /// pipe names. It hashes the pipe name so that the same pipe name will always result in the
     /// same color. This is useful for making program output more readable, since a user can
     /// quickly see all the fds that point to a particular pipe.
-    #[allow(unused)] // TODO: delete this line for Milestone 5
     pub fn colorized_name(&self) -> String {
         if self.name.starts_with("<pipe") {
             let mut hash = DefaultHasher::new();

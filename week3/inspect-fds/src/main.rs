@@ -10,11 +10,24 @@ fn main() {
         println!("Usage: {} <name or pid of target>", args[0]);
         std::process::exit(1);
     }
-    #[allow(unused)] // TODO: delete this line for Milestone 1
+
     let target = &args[1];
 
-    // TODO: Milestone 1: Get the target Process using psutils::get_target()
-    unimplemented!();
+    // Milestone 1: Get the target Process using psutils::get_target()
+    match ps_utils::get_target(target).expect("Failed to call ps and pgrep") {
+        Some(process) => {
+            process.print();
+
+            // Milestone 5: Inspecting child processes
+            for child_process in ps_utils::get_child_processes(process.pid).expect("Failed to callps and pgrep at child process") {
+                child_process.print();
+            }
+        }
+        None => {
+            println!("Target \"{}\" did not match any running PIDs or executables", target);
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -52,7 +65,7 @@ mod test {
                 .expect("Could not find target/debug/inspect-fds. Is the binary compiled?")
                 .code()
                 .expect("Program was unexpectedly terminated by a signal"),
-            1,
+            0,
             "Program exited with unexpected return code. Make sure you handle the case where \
             ps_utils::get_target returns None and print an error message and return status \
             1."
