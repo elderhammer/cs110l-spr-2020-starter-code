@@ -66,17 +66,40 @@ fn get_input_numbers() -> VecDeque<u32> {
     numbers
 }
 
+// 同步原语消除竞争
+fn pop_number(input_numbers: Arc<Mutex<VecDeque<u32>>>) -> Option<u32> {
+    input_numbers.lock().ok()?.pop_back()
+}
+
 fn main() {
     let num_threads = num_cpus::get();
     println!("Farm starting on {} CPUs", num_threads);
     let start = Instant::now();
 
-    // TODO: call get_input_numbers() and store a queue of numbers to factor
+    // call get_input_numbers() and store a queue of numbers to factor
+    let input_numbers = get_input_numbers();
+    println!("Input numbers: {:?}", input_numbers);
 
-    // TODO: spawn `num_threads` threads, each of which pops numbers off the queue and calls
+    // 1.将 input_numbers 传递给线程，利用 Arc 获得 Send 能力
+    // 2.多个线程从 input_numbers pop 数据，产生竞争状态，利用 Mutex 同步原语消除竞争
+    let input_numbers = Arc::new(Mutex::new(input_numbers));
+
+    // spawn `num_threads` threads, each of which pops numbers off the queue and calls
     // factor_number() until the queue is empty
+    let mut threads =  vec![];
+    for _ in 0..num_threads {
+        let input_numbers_clone = input_numbers.clone();
+        threads.push(thread::spawn(move || {
+            while let Some(number) = pop_number(input_numbers_clone.clone()) {
+                factor_number(number);
+            }
+        }));
+    }
 
-    // TODO: join all the threads you created
+    // join all the threads you created
+    for handler in threads {
+        handler.join().expect("something wrong");
+    }
 
     println!("Total execution time: {:?}", start.elapsed());
 }
