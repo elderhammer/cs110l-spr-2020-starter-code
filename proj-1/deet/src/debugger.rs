@@ -1,5 +1,6 @@
 use crate::debugger_command::DebuggerCommand;
 use crate::inferior::Inferior;
+use crate::inferior::Status;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
@@ -32,17 +33,49 @@ impl Debugger {
         loop {
             match self.get_next_command() {
                 DebuggerCommand::Run(args) => {
+                    if let Some(ref mut inferior) = self.inferior {
+                        inferior.kill();
+                    }
+
                     if let Some(inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
                         self.inferior = Some(inferior);
-                        // TODO (milestone 1): make the inferior run
+                        // (milestone 1): make the inferior run
                         // You may use self.inferior.as_mut().unwrap() to get a mutable reference
                         // to the Inferior object
+
+                        let mut inferior = self.inferior.as_mut().unwrap();
+                        match inferior.continu3() {
+                            Ok(status) => match status {
+                                Status::Stopped(signal, _) => println!("Child stopped: {}", signal),
+                                Status::Signaled(signal) => println!("Child signaled: {}", signal),
+                                Status::Exited(code) => println!("Child exited: {}", code),
+                            }
+                            Err(error) => println!("Failed to continue child: {}", error)
+                        }
+
                     } else {
                         println!("Error starting subprocess");
                     }
                 }
+                DebuggerCommand::Continue => {
+                    if let Some(ref mut inferior) = self.inferior {
+                        match inferior.continu3() {
+                            Ok(status) => match status {
+                                Status::Stopped(signal, _) => println!("Child stopped: {}", signal),
+                                Status::Signaled(signal) => println!("Child signaled: {}", signal),
+                                Status::Exited(code) => println!("Child exited: {}", code),
+                            }
+                            Err(error) => println!("Failed to continue child: {}", error)
+                        }
+                    } else {
+                        println!("There has no child.")
+                    }
+                }
                 DebuggerCommand::Quit => {
+                    if let Some(ref mut inferior) = self.inferior {
+                        inferior.kill();
+                    }
                     return;
                 }
             }
