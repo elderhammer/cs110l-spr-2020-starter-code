@@ -22,6 +22,14 @@ impl Grid {
         (self.num_rows, self.num_cols)
     }
 
+    fn index(&self, row: usize, col: usize) -> Option<usize> {
+        if row < self.num_rows && col < self.num_cols {
+            Some(row * self.num_cols + col)
+        } else {
+            None
+        }
+    }
+
     /// Returns the element at the specified location. If the location is out of bounds, returns
     /// None.
     ///
@@ -30,18 +38,28 @@ impl Grid {
     /// but others argue that makes code needlessly complex. Here, we decided to return Option to
     /// give you more practice with Option :) and because this similar library returns Option:
     /// https://docs.rs/array2d/0.2.1/array2d/struct.Array2D.html
-    #[allow(unused)] // TODO: delete this line when you implement this function
+    // #[allow(unused)] // TODO: delete this line when you implement this function
     pub fn get(&self, row: usize, col: usize) -> Option<usize> {
-        unimplemented!();
+        // unimplemented!();
         // Be sure to delete the #[allow(unused)] line above
+
+        self.index(row, col).map(|idx| self.elems[idx])
     }
 
     /// Sets the element at the specified location to the specified value. If the location is out
     /// of bounds, returns Err with an error message.
     #[allow(unused)] // TODO: delete this line when you implement this function
     pub fn set(&mut self, row: usize, col: usize, val: usize) -> Result<(), &'static str> {
-        unimplemented!();
+        // unimplemented!();
         // Be sure to delete the #[allow(unused)] line above
+
+        self.index(row, col).map_or_else(
+            || Err("Out of bounds"),
+            |idx| {
+                self.elems[idx] = val;
+                Ok(())  
+            }
+        )
     }
 
     /// Prints a visual representation of the grid. You can use this for debugging.
