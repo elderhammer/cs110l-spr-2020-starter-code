@@ -6,6 +6,7 @@ use rand::{Rng, SeedableRng};
 use tokio::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use std::time::Duration;
 
 /// Contains information parsed from the command-line invocation of balancebeam. The Clap macros
 /// provide a fancy way to automatically construct a command-line argument parser.
@@ -86,6 +87,9 @@ async fn main() {
         max_requests_per_minute: options.max_requests_per_minute,
     });
 
+    // health check
+    health_check(state.clone());
+
     // Listen
     while let Ok((stream, _)) = listener.accept().await {
         let state_clone = state.clone();
@@ -94,6 +98,71 @@ async fn main() {
             // 先 move 进 closure，再借用
             handle_connection(stream, &state_clone).await;
         });
+    }
+}
+
+fn health_check(state: Arc<ProxyState>) {
+    tokio::spawn(async move {
+        let interval = state.active_health_check_interval;
+        let check_path = state.active_health_check_path.clone();
+        loop {
+            let mut threads = vec![];
+            for upstream_ip in state.upstream_addresses.iter() {
+                let upstream_ip = upstream_ip.clone();
+                let check_path_clone = check_path.clone();
+                threads.push((upstream_ip.clone(), tokio::spawn(async move {
+                    check_upstream(upstream_ip.clone(), check_path_clone).await
+                })));
+            }
+
+            for (upstream_ip, handle) in threads {
+                match handle.await {
+                    Ok(join_result) => match join_result {
+                        Ok(_) => {
+                            log::debug!("Add {} to live upstream addresses", upstream_ip);
+                            add_to_live_upstream_address(&state, upstream_ip).await;
+                        }
+                        Err(_) => {
+                            log::debug!("Remove {} from live upstream addresses", upstream_ip);
+                            remove_from_live_upstream_address(&state, upstream_ip).await;
+                        }
+                    }
+                    Err(_) => {
+                        log::debug!("Remove {} from live upstream addresses", upstream_ip);
+                        remove_from_live_upstream_address(&state, upstream_ip).await;
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(interval as u64)).await;
+        }
+    });
+}
+
+async fn check_upstream(upstream_ip: String, check_path: String) -> Result<(), std::io::Error> {
+    // connect
+    let mut upstream = TcpStream::connect(upstream_ip.clone()).await?;
+
+    // request
+    let request = http::Request::builder()
+        .method(http::Method::GET)
+        .uri(check_path)
+        .header("Host", upstream_ip)
+        .body(Vec::new()).unwrap();
+
+    // check request
+    request::write_to_stream(&request, &mut upstream).await?;
+
+    // check response
+    match response::read_from_stream(&mut upstream, request.method()).await {
+        Ok(response) => if response.status().is_server_error() {
+            Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "500"))
+        } else {
+            Ok(())
+        }
+        Err(_) => {
+            Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "500"))
+        }
     }
 }
 
@@ -121,6 +190,14 @@ async fn remove_from_live_upstream_address(state: &Arc<ProxyState>, upstream_ip:
     *live_upstream_addresses = still_live_upstream_addresses.clone();
 
     still_live_upstream_addresses
+}
+
+async fn add_to_live_upstream_address(state: &Arc<ProxyState>, upstream_ip: String) -> Vec<String> {
+    let mut live_upstream_addresses = state.live_upstream_addresses.write().await;
+
+    live_upstream_addresses.push(upstream_ip);
+
+    (*live_upstream_addresses).clone()
 }
 
 async fn connect_to_upstream(state: &Arc<ProxyState>) -> Result<TcpStream, std::io::Error> {
