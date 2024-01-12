@@ -5,7 +5,7 @@ use clap::Parser;
 use rand::{Rng, SeedableRng};
 use tokio::net::{TcpListener, TcpStream};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Mutex};
 use std::time::Duration;
 
 /// Contains information parsed from the command-line invocation of balancebeam. The Clap macros
@@ -44,6 +44,8 @@ struct ProxyState {
     /// Maximum number of requests an individual IP can make in a minute (Milestone 5)
     #[allow(dead_code)]
     max_requests_per_minute: usize,
+    /// Total number of requests in a minute
+    total_requests_in_a_minute: Arc<Mutex<usize>>,
     /// Addresses of servers that we are proxying to
     #[allow(dead_code)]
     upstream_addresses: Vec<String>,
@@ -85,10 +87,14 @@ async fn main() {
         active_health_check_interval: options.active_health_check_interval,
         active_health_check_path: options.active_health_check_path,
         max_requests_per_minute: options.max_requests_per_minute,
+        total_requests_in_a_minute: Arc::new(Mutex::new(0))
     });
 
     // health check
     health_check(state.clone());
+
+    // reset fixed window
+    reset_minute_requests(state.clone());
 
     // Listen
     while let Ok((stream, _)) = listener.accept().await {
@@ -106,6 +112,8 @@ fn health_check(state: Arc<ProxyState>) {
         let interval = state.active_health_check_interval;
         let check_path = state.active_health_check_path.clone();
         loop {
+            tokio::time::sleep(Duration::from_secs(interval as u64)).await;
+
             let mut threads = vec![];
             for upstream_ip in state.upstream_addresses.iter() {
                 let upstream_ip = upstream_ip.clone();
@@ -133,8 +141,20 @@ fn health_check(state: Arc<ProxyState>) {
                     }
                 }
             }
+        }
+    });
+}
 
-            tokio::time::sleep(Duration::from_secs(interval as u64)).await;
+fn reset_minute_requests(state: Arc<ProxyState>) {
+    tokio::spawn(async move {
+        loop {
+            // reset per minute
+            tokio::time::sleep(Duration::from_secs(60)).await;
+
+            // reset
+            let mut times = state.total_requests_in_a_minute.lock().await;
+            log::debug!("Reset times: {}", *times);
+            *times = 0;
         }
     });
 }
@@ -171,11 +191,15 @@ async fn check_upstream(upstream_ip: String, check_path: String) -> Result<(), s
 // 不等待访问结果；得到结果之后再次操作
 // 既然如此，那就用读写锁
 async fn select_upstream_address_randomly(state: &Arc<ProxyState>) -> Option<String> {
-    let mut rng = rand::rngs::StdRng::from_entropy();
     let live_upstream_addresses = state.live_upstream_addresses.read().await;
-    let upstream_idx = rng.gen_range(0..live_upstream_addresses.len());
-
-    Some(live_upstream_addresses.get(upstream_idx)?.to_string())
+    if live_upstream_addresses.len() > 0 {
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        let upstream_idx = rng.gen_range(0..live_upstream_addresses.len());
+    
+        Some(live_upstream_addresses.get(upstream_idx)?.to_string())
+    } else {
+        None
+    }
 }
 
 async fn remove_from_live_upstream_address(state: &Arc<ProxyState>, upstream_ip: String) -> Vec<String> {
@@ -287,6 +311,23 @@ async fn handle_connection(mut client_conn: TcpStream, state: &Arc<ProxyState>) 
             upstream_ip,
             request::format_request_line(&request)
         );
+
+        // check request rate
+        let mut times = state.total_requests_in_a_minute.lock().await;
+        if (*times) < state.max_requests_per_minute {
+            *times += 1;
+            log::debug!("Request Ok: {}", *times);
+            drop(times);
+        } else {
+            log::debug!("Too many requests: {} >= {}", *times, state.max_requests_per_minute);
+            drop(times);
+
+            // too many request
+            let response = response::make_http_error(http::StatusCode::TOO_MANY_REQUESTS);
+            send_response(&mut client_conn, &response).await;
+
+            continue;
+        }
 
         // Add X-Forwarded-For header so that the upstream server knows the client's IP address.
         // (We're the ones connecting directly to the upstream server, so without this header, the
